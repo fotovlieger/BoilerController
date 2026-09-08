@@ -1,17 +1,19 @@
 #include "my_component.h"
 #include "esphome/core/log.h"
 
-// State is derived from the select/number components in loop() and published to
-// the ISR as a single 32-bit value (control_, scaled x100). The set_* wiring
-// calls only store pointers: they run once at startup, before the select/number
-// state is restored, so they must not read any state.
+// The control target is derived from the select/number components and published
+// to the ISR as a single 32-bit value (control_, scaled x100). Instead of
+// polling in loop(), we subscribe to select/number state changes and only
+// recompute when they actually change. The set_* wiring calls only store
+// pointers: they run once at startup, before the select/number state is
+// restored, so they must not read any state.
 
 namespace esphome {
 namespace my_component {
 
 static const char *TAG = "my_component";
 
-void MyComponent::loop() {
+void MyComponent::update_target() {
   uint32_t target = 0;  // "Off" (and anything unknown) -> 0
   const std::string &opt = mode_->current_option();
   if (opt == "On") {
@@ -90,9 +92,17 @@ void MyComponent::setup() {
   io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
   gpio_config(&io_conf);
 
-  gpio_install_isr_service(0);
-  gpio_isr_handler_add((gpio_num_t)clock_pin_number_, gpio_edge_isr, this);
-}
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add((gpio_num_t)clock_pin_number_, gpio_edge_isr, this);
+
+    // React to external changes instead of polling. The callbacks fire whenever
+    // the select or number state changes (incl. when it is restored during
+    // startup); update_target() below also covers state restored before these
+    // subscriptions were registered.
+    mode_->add_on_state_callback([this](size_t) { this->update_target(); });
+    power_->add_on_state_callback([this](float) { this->update_target(); });
+    this->update_target();
+  }
 
 void IRAM_ATTR MyComponent::gpio_edge_isr(void *arg) {
   auto inst = (MyComponent *)arg;

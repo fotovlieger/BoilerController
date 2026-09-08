@@ -45,7 +45,7 @@ namespace esphome
       void set_trigger(GPIOPin *pin, int raw_pin);
 
       void setup() override;
-      void loop() override;
+      void update_target();
 
       // Interrupy handler
       static bool IRAM_ATTR delay_timer_cb(gptimer_handle_t timer,

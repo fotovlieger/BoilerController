@@ -31,7 +31,7 @@ void MyComponent::update_target() {
     gptimer_stop(delay_timer_);
     gptimer_stop(pulse_timer_);
     control_ = target;
-    ESP_LOGD(TAG, "power target -> %u.%02u %%", target / 100, target % 100);
+    ESP_LOGD(TAG, "power target -> %u.%02u %%", (unsigned)(target / 100), (unsigned)(target % 100));
   }
 }
 
@@ -43,25 +43,22 @@ void MyComponent::set_mode(select::Select *sel) {
   this->mode_ = sel;
 }
 
-void MyComponent::set_clock(GPIOPin *pin, int raw_pin) {
-  ESP_LOGI(TAG, "Clock pin set to GPIO%d", raw_pin);
-  this->clock_ = pin;
-  this->clock_pin_number_ = raw_pin;
+void MyComponent::set_clock(InternalGPIOPin *pin) {
+  this->clock_pin_number_ = pin->get_pin();
+  ESP_LOGI(TAG, "Clock pin set to GPIO%d", this->clock_pin_number_);
 }
 
-void MyComponent::set_trigger(GPIOPin *pin, int raw_pin) {
-  ESP_LOGI(TAG, "Trigger pin set to GPIO%d", raw_pin);
-  this->trigger_ = pin;
-  this->trigger_pin_number_ = raw_pin;
+void MyComponent::set_trigger(InternalGPIOPin *pin) {
+  this->trigger_pin_number_ = pin->get_pin();
+  ESP_LOGI(TAG, "Trigger pin set to GPIO%d", this->trigger_pin_number_);
 }
 
 void MyComponent::setup() {
   ESP_LOGI(TAG, "Setting up MyComponent (GPTimer hardware pulse)...");
 
-  clock_->setup();
-  trigger_->setup();
-
-  // Configure trigger pin directly for ISR safety
+  // Single owner for pin I/O: the pins are configured directly here with the
+  // raw GPIO numbers obtained in set_clock()/set_trigger(). ESPHome's pin
+  // objects are only used as the source of those numbers, not configured twice.
   gpio_reset_pin((gpio_num_t)trigger_pin_number_);
   gpio_set_direction((gpio_num_t)trigger_pin_number_, GPIO_MODE_OUTPUT);
   gpio_set_level((gpio_num_t)trigger_pin_number_, 0);  // start 'Off' (inverted by optocoupler)

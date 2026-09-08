@@ -22,9 +22,10 @@ namespace esphome
 
       number::Number *power_{nullptr};
       select::Select *mode_{nullptr};
-      GPIOPin *clock_{nullptr};
-      GPIOPin *trigger_{nullptr};
 
+      // Raw GPIO numbers, derived once from the GPIOPin objects passed in the
+      // set_* wiring calls. Pins are configured directly in setup() (single
+      // owner for the direct/ISR driver style used here).
       int clock_pin_number_{-1};
       int trigger_pin_number_{-1};
 
@@ -41,8 +42,8 @@ namespace esphome
       // handler 
       void set_power(number::Number *num);
       void set_mode(select::Select *sel);
-      void set_clock(GPIOPin *pin, int raw_pin);
-      void set_trigger(GPIOPin *pin, int raw_pin);
+      void set_clock(InternalGPIOPin *pin);
+      void set_trigger(InternalGPIOPin *pin);
 
       void setup() override;
       void update_target();

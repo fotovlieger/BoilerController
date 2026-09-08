@@ -31,5 +31,5 @@ async def to_code(config):
     clock_pin = await cg.gpio_pin_expression(config['clock'])
     trigger_pin = await cg.gpio_pin_expression(config['trigger'])
 
-    cg.add(var.set_clock(clock_pin, config['clock']['number']))
-    cg.add(var.set_trigger(trigger_pin, config['trigger']['number']))
+    cg.add(var.set_clock(clock_pin))
+    cg.add(var.set_trigger(trigger_pin))

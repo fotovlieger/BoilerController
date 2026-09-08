@@ -8,159 +8,153 @@
 
 namespace esphome {
 namespace my_component {
-  static const char *TAG = "my_component";
 
-  void MyComponent::loop() {
-    uint32_t target = 0;  // "Off" (and anything unknown) -> 0
-    const std::string &opt = mode_->current_option();
-    if (opt == "On") {
-      target = POWER_FULL;
-    } else if (opt == "Auto" || opt == "Manual") {
-      double p = power_->state;
-      if (p > 100.) p = 100.;
-      if (p < 2.) p = 0.;  // less than 2 % gives timing risks
-      target = (uint32_t)(p * 100.);
-    }
+static const char *TAG = "my_component";
 
-    if (target != control_) {
-      // Drop any in-flight delay/pulse first, so a pending alarm can no longer
-      // fire a stray pulse after an Off/On transition.
-      gptimer_stop(delay_timer_);
-      gptimer_stop(pulse_timer_);
-      control_ = target;
-      ESP_LOGD(TAG, "power target -> %u.%02u %%", target / 100, target % 100);
-    }
+void MyComponent::loop() {
+  uint32_t target = 0;  // "Off" (and anything unknown) -> 0
+  const std::string &opt = mode_->current_option();
+  if (opt == "On") {
+    target = POWER_FULL;
+  } else if (opt == "Auto" || opt == "Manual") {
+    double p = power_->state;
+    if (p > 100.) p = 100.;
+    if (p < 2.) p = 0.;  // less than 2 % gives timing risks
+    target = (uint32_t)(p * 100.);
   }
 
-  void MyComponent::set_power(number::Number *num) {
-    this->power_ = num;
+  if (target != control_) {
+    // Drop any in-flight delay/pulse first, so a pending alarm can no longer
+    // fire a stray pulse after an Off/On transition.
+    gptimer_stop(delay_timer_);
+    gptimer_stop(pulse_timer_);
+    control_ = target;
+    ESP_LOGD(TAG, "power target -> %u.%02u %%", target / 100, target % 100);
   }
+}
 
-  void MyComponent::set_mode(select::Select *sel) {
-    this->mode_ = sel;
-  }
+void MyComponent::set_power(number::Number *num) {
+  this->power_ = num;
+}
+
+void MyComponent::set_mode(select::Select *sel) {
+  this->mode_ = sel;
+}
 
 void MyComponent::set_clock(GPIOPin *pin, int raw_pin) {
-    ESP_LOGI(TAG, "Clock pin set to GPIO%d", raw_pin);
-    this->clock_ = pin;
-    this->clock_pin_number_ = raw_pin;
+  ESP_LOGI(TAG, "Clock pin set to GPIO%d", raw_pin);
+  this->clock_ = pin;
+  this->clock_pin_number_ = raw_pin;
 }
 
 void MyComponent::set_trigger(GPIOPin *pin, int raw_pin) {
-    ESP_LOGI(TAG, "Trigger pin set to GPIO%d", raw_pin);
-    this->trigger_ = pin;
-    this->trigger_pin_number_ = raw_pin;
+  ESP_LOGI(TAG, "Trigger pin set to GPIO%d", raw_pin);
+  this->trigger_ = pin;
+  this->trigger_pin_number_ = raw_pin;
 }
 
+void MyComponent::setup() {
+  ESP_LOGI(TAG, "Setting up MyComponent (GPTimer hardware pulse)...");
 
-  void MyComponent::setup()
-  {
-    ESP_LOGI(TAG, "Setting up MyComponent (GPTimer hardware pulse)...");
+  clock_->setup();
+  trigger_->setup();
 
-    clock_->setup();
-    trigger_->setup();
+  // Configure trigger pin directly for ISR safety
+  gpio_reset_pin((gpio_num_t)trigger_pin_number_);
+  gpio_set_direction((gpio_num_t)trigger_pin_number_, GPIO_MODE_OUTPUT);
+  gpio_set_level((gpio_num_t)trigger_pin_number_, 0);  // start 'Off' (inverted by optocoupler)
 
-    // Configure trigger pin directly for ISR safety
-    gpio_reset_pin((gpio_num_t)trigger_pin_number_);
-    gpio_set_direction((gpio_num_t)trigger_pin_number_, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)trigger_pin_number_, 0);  // start 'Off' (inverted by optocoupler)
+  // Configure timers
+  gptimer_config_t timer_cfg = {
+      .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+      .direction = GPTIMER_COUNT_UP,
+      .resolution_hz = 1000000  // 1 tick = 1 us
+  };
 
-    // Configure timers
-    gptimer_config_t timer_cfg = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000 // 1 tick = 1 µs
-    };
+  ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &delay_timer_));
+  gptimer_event_callbacks_t delay_cbs = {.on_alarm = delay_timer_cb};
+  ESP_ERROR_CHECK(gptimer_register_event_callbacks(delay_timer_, &delay_cbs, this));
+  ESP_ERROR_CHECK(gptimer_enable(delay_timer_));
 
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &delay_timer_));
-    gptimer_event_callbacks_t delay_cbs = {.on_alarm = delay_timer_cb};
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(delay_timer_, &delay_cbs, this));
-    ESP_ERROR_CHECK(gptimer_enable(delay_timer_));
+  ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &pulse_timer_));
+  gptimer_event_callbacks_t pulse_cbs = {.on_alarm = pulse_timer_cb};
+  ESP_ERROR_CHECK(gptimer_register_event_callbacks(pulse_timer_, &pulse_cbs, this));
+  ESP_ERROR_CHECK(gptimer_enable(pulse_timer_));
 
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &pulse_timer_));
-    gptimer_event_callbacks_t pulse_cbs = {.on_alarm = pulse_timer_cb};
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(pulse_timer_, &pulse_cbs, this));
-    ESP_ERROR_CHECK(gptimer_enable(pulse_timer_));
+  // Configure clock pin with edge interrupts
+  gpio_config_t io_conf{};
+  io_conf.intr_type = GPIO_INTR_ANYEDGE;
+  io_conf.mode = GPIO_MODE_INPUT;
+  io_conf.pin_bit_mask = (1ULL << clock_pin_number_);
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+  gpio_config(&io_conf);
 
-    // Configure clock pin with edge interrupts
-    gpio_config_t io_conf{};
-    io_conf.intr_type = GPIO_INTR_ANYEDGE;
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = (1ULL << clock_pin_number_);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    gpio_config(&io_conf);
+  gpio_install_isr_service(0);
+  gpio_isr_handler_add((gpio_num_t)clock_pin_number_, gpio_edge_isr, this);
+}
 
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add((gpio_num_t)clock_pin_number_, gpio_edge_isr, this);
-  }
+void IRAM_ATTR MyComponent::gpio_edge_isr(void *arg) {
+  auto inst = (MyComponent *)arg;
+  const uint32_t control = inst->control_;
 
-  void IRAM_ATTR MyComponent::gpio_edge_isr(void *arg)
-  {
-    auto inst = (MyComponent *)arg;
-    const uint32_t control = inst->control_;
-
-    if (control == 0) {
-      // Off: cancel any pending pulse and hold the output low.
-      gptimer_stop(inst->delay_timer_);
-      gptimer_stop(inst->pulse_timer_);
-      gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 0);  // inverted by optocoupler
-    }
-    else if (control == POWER_FULL) {
-      // Full power: cancel any pending pulse and hold the output high.
-      gptimer_stop(inst->delay_timer_);
-      gptimer_stop(inst->pulse_timer_);
-      gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);  // inverted by optocoupler
-    }
-    else {
-      // generate a delayed pulse
-      gptimer_set_raw_count(inst->delay_timer_, 0);
-      gptimer_alarm_config_t alarm_cfg = {
-          .alarm_count = POWER_FULL - control,  // ~us of delay (1 tick = 1 us)
-          .flags = {.auto_reload_on_alarm = false}};
-      gptimer_set_alarm_action(inst->delay_timer_, &alarm_cfg);
-      gptimer_start(inst->delay_timer_);
-    }
-  }
-
-  bool IRAM_ATTR MyComponent::delay_timer_cb(gptimer_handle_t timer,
-                                              const gptimer_alarm_event_data_t *edata,
-                                              void *arg)
-  {
-    auto inst = (MyComponent *)arg; // this
-
-    // Target may have changed to Off/Full while the delay was armed; only fire
-    // the pulse if we are still in a partial-power state.
-    const uint32_t control = inst->control_;
-    if (control == 0) {
-      return false;
-    }
-    if (control == POWER_FULL) {
-      gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);
-      return false;
-    }
-
-    gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);
-    gptimer_stop(timer);
-    gptimer_set_raw_count(inst->pulse_timer_, 0);
-
+  if (control == 0) {
+    // Off: cancel any pending pulse and hold the output low.
+    gptimer_stop(inst->delay_timer_);
+    gptimer_stop(inst->pulse_timer_);
+    gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 0);  // inverted by optocoupler
+  } else if (control == POWER_FULL) {
+    // Full power: cancel any pending pulse and hold the output high.
+    gptimer_stop(inst->delay_timer_);
+    gptimer_stop(inst->pulse_timer_);
+    gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);  // inverted by optocoupler
+  } else {
+    // generate a delayed pulse
+    gptimer_set_raw_count(inst->delay_timer_, 0);
     gptimer_alarm_config_t alarm_cfg = {
-        .alarm_count = POWER_PULSE_US,
+        .alarm_count = POWER_FULL - control,  // ~us of delay (1 tick = 1 us)
         .flags = {.auto_reload_on_alarm = false}};
-    gptimer_set_alarm_action(inst->pulse_timer_, &alarm_cfg);
-    gptimer_start(inst->pulse_timer_);
+    gptimer_set_alarm_action(inst->delay_timer_, &alarm_cfg);
+    gptimer_start(inst->delay_timer_);
+  }
+}
+
+bool IRAM_ATTR MyComponent::delay_timer_cb(gptimer_handle_t timer,
+                                           const gptimer_alarm_event_data_t *edata,
+                                           void *arg) {
+  auto inst = (MyComponent *)arg;  // this
+
+  // Target may have changed to Off/Full while the delay was armed; only fire
+  // the pulse if we are still in a partial-power state.
+  const uint32_t control = inst->control_;
+  if (control == 0) {
+    return false;
+  }
+  if (control == POWER_FULL) {
+    gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);
     return false;
   }
 
-  bool IRAM_ATTR MyComponent::pulse_timer_cb(gptimer_handle_t timer,
-                                              const gptimer_alarm_event_data_t *edata,
-                                              void *arg)
-  {
-    auto inst = (MyComponent *)arg; // this
-    gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 0);
-    gptimer_stop(timer);
-    return false;
-  }
+  gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 1);
+  gptimer_stop(timer);
+  gptimer_set_raw_count(inst->pulse_timer_, 0);
 
-} // namespace my_component
-} // namespace esphome
+  gptimer_alarm_config_t alarm_cfg = {
+      .alarm_count = POWER_PULSE_US,
+      .flags = {.auto_reload_on_alarm = false}};
+  gptimer_set_alarm_action(inst->pulse_timer_, &alarm_cfg);
+  gptimer_start(inst->pulse_timer_);
+  return false;
+}
+
+bool IRAM_ATTR MyComponent::pulse_timer_cb(gptimer_handle_t timer,
+                                           const gptimer_alarm_event_data_t *edata,
+                                           void *arg) {
+  auto inst = (MyComponent *)arg;  // this
+  gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 0);
+  gptimer_stop(timer);
+  return false;
+}
+
+}  // namespace my_component
+}  // namespace esphome

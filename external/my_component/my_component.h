@@ -20,25 +20,19 @@ namespace esphome
     {
     public:
 
-      enum PowerMode {
-        POWER_OFF,
-        POWER_ON,
-        POWER_AUTO,
-        POWER_MANUAL
-      };
       number::Number *power_{nullptr};
       select::Select *mode_{nullptr};
       GPIOPin *clock_{nullptr};
       GPIOPin *trigger_{nullptr};
-      
+
       int clock_pin_number_{-1};
       int trigger_pin_number_{-1};
 
-      
-      volatile uint64_t delay_us_{2000};
-      volatile uint64_t pulse_us_{200};
-      volatile PowerMode power_mode_;
-      volatile double power_setpoint_;
+      // Control target scaled by 100 (0..10000 = 0..100 %). Kept as a single
+      // 32-bit value so loop() (task) and the ISRs share it atomically.
+      static constexpr uint32_t POWER_FULL = 10000u;
+      static constexpr uint32_t POWER_PULSE_US = 200u;
+      volatile uint32_t control_{0};
 
       // GPTimer handles
       gptimer_handle_t delay_timer_{nullptr};

@@ -1,5 +1,7 @@
 #include "my_component.h"
 
+#include <cmath>
+
 #include "esphome/core/log.h"
 
 // The control target is derived from the select/number components in
@@ -35,6 +37,7 @@ void MyComponent::update_target() {
     target = POWER_FULL;
   } else if (opt == "Auto" || opt == "Manual") {
     double percent = power_->state;
+    if (!std::isfinite(percent)) percent = 0.;  // state is NAN until first value/restore
     if (percent > 100.) percent = 100.;
     if (percent < 2.) percent = 0.;  // below 2 % is unreliable to time
     target = (uint32_t)(percent * 100.);
@@ -45,9 +48,11 @@ void MyComponent::update_target() {
   }
 
   // Drop any in-flight delay/pulse first, so a pending alarm can no longer
-  // fire a stray pulse after an Off/On transition.
+  // fire a stray pulse after an Off/On transition, and park the gate at the
+  // level for the new target (high only for full power).
   gptimer_stop(delay_timer_);
   gptimer_stop(pulse_timer_);
+  gpio_set_level((gpio_num_t)trigger_pin_number_, target == POWER_FULL ? 1 : 0);
   control_ = target;
   ESP_LOGD(TAG, "power target -> %u.%02u %%", (unsigned)(target / 100),
            (unsigned)(target % 100));
@@ -99,7 +104,7 @@ void MyComponent::setup() {
   this->update_target();
 }
 
-void IRAM_ATTR MyComponent::gpio_edge_isr(void *arg) {
+void MyComponent::gpio_edge_isr(void *arg) {
   auto inst = (MyComponent *)arg;
   const uint32_t control = inst->control_;
 
@@ -125,9 +130,9 @@ void IRAM_ATTR MyComponent::gpio_edge_isr(void *arg) {
   }
 }
 
-bool IRAM_ATTR MyComponent::delay_timer_cb(gptimer_handle_t timer,
-                                           const gptimer_alarm_event_data_t *edata,
-                                           void *arg) {
+bool MyComponent::delay_timer_cb(gptimer_handle_t timer,
+                                 const gptimer_alarm_event_data_t *edata,
+                                 void *arg) {
   auto inst = (MyComponent *)arg;
 
   // The target may have changed while the delay was armed; only fire the pulse
@@ -154,9 +159,9 @@ bool IRAM_ATTR MyComponent::delay_timer_cb(gptimer_handle_t timer,
   return false;
 }
 
-bool IRAM_ATTR MyComponent::pulse_timer_cb(gptimer_handle_t timer,
-                                           const gptimer_alarm_event_data_t *edata,
-                                           void *arg) {
+bool MyComponent::pulse_timer_cb(gptimer_handle_t timer,
+                                 const gptimer_alarm_event_data_t *edata,
+                                 void *arg) {
   auto inst = (MyComponent *)arg;
   gpio_set_level((gpio_num_t)inst->trigger_pin_number_, 0);
   gptimer_stop(timer);

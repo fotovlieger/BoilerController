@@ -23,13 +23,15 @@ class MyComponent : public Component {
  private:
   void update_target();
 
-  static bool IRAM_ATTR delay_timer_cb(gptimer_handle_t timer,
-                                       const gptimer_alarm_event_data_t *edata,
-                                       void *arg);
-  static bool IRAM_ATTR pulse_timer_cb(gptimer_handle_t timer,
-                                       const gptimer_alarm_event_data_t *edata,
-                                       void *arg);
-  static void IRAM_ATTR gpio_edge_isr(void *arg);
+  // Not IRAM_ATTR: the GPTimer/GPIO ISR service is allocated without
+  // ESP_INTR_FLAG_IRAM and these handlers call flash-resident gptimer APIs.
+  static bool delay_timer_cb(gptimer_handle_t timer,
+                             const gptimer_alarm_event_data_t *edata,
+                             void *arg);
+  static bool pulse_timer_cb(gptimer_handle_t timer,
+                             const gptimer_alarm_event_data_t *edata,
+                             void *arg);
+  static void gpio_edge_isr(void *arg);
 
   number::Number *power_{nullptr};
   select::Select *mode_{nullptr};

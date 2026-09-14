@@ -6,8 +6,9 @@
 
 // The control target is derived from the select/number components in
 // update_target() and handed to the ISR as a single 32-bit value (control_,
-// power scaled by 100). update_target() runs on state changes only; the setters
-// just store pointers and run at startup, before any state is restored.
+// encoded as POWER_FULL - firing delay in us). update_target() runs on state
+// changes only; the setters just store pointers and run at startup, before any
+// state is restored.
 
 namespace esphome {
 namespace my_component {
@@ -31,16 +32,22 @@ void MyComponent::set_trigger(InternalGPIOPin *pin) {
 }
 
 void MyComponent::update_target() {
-  uint32_t target = 0;  // "Off" and anything unknown -> 0
+  uint32_t target = 0;   // "Off" and anything unknown -> 0
+  uint32_t delay = POWER_FULL;
+  double percent = 0.;
   const std::string &opt = mode_->current_option();
   if (opt == "On") {
     target = POWER_FULL;
+    percent = 100.;
+    delay = 0;
   } else if (opt == "Auto" || opt == "Manual") {
-    double percent = power_->state;
+    percent = power_->state;
     if (!std::isfinite(percent)) percent = 0.;  // state is NAN until first value/restore
     if (percent > 100.) percent = 100.;
     if (percent < 2.) percent = 0.;  // below 2 % is unreliable to time
-    target = (uint32_t)(percent * 100.);
+    // Convert requested power into the firing delay that actually delivers it.
+    delay = power_to_delay_us(percent / 100.);
+    target = POWER_FULL - delay;
   }
 
   if (target == control_) {
@@ -54,8 +61,7 @@ void MyComponent::update_target() {
   gptimer_stop(pulse_timer_);
   gpio_set_level((gpio_num_t)trigger_pin_number_, target == POWER_FULL ? 1 : 0);
   control_ = target;
-  ESP_LOGD(TAG, "power target -> %u.%02u %%", (unsigned)(target / 100),
-           (unsigned)(target % 100));
+  ESP_LOGD(TAG, "power %.1f %% -> delay %u us", percent, (unsigned)delay);
 }
 
 void MyComponent::setup() {

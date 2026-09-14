@@ -7,6 +7,7 @@
 
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
+#include "power_law.h"
 
 namespace esphome {
 namespace my_component {
@@ -43,11 +44,12 @@ class MyComponent : public Component {
   gptimer_handle_t delay_timer_{nullptr};
   gptimer_handle_t pulse_timer_{nullptr};
 
-  // Target power scaled by 100 (0..10000 = 0..100 %). A single 32-bit value so
-  // update_target() and the ISRs can share it without tearing.
+  // Encoded firing delay: POWER_FULL - delay_us (0 = Off, POWER_FULL = full
+  // on). update_target() stores the delay that delivers the requested power;
+  // a single 32-bit value so the ISRs can read it without tearing.
   volatile uint32_t control_{0};
 
-  static constexpr uint32_t POWER_FULL = 10000u;
+  static constexpr uint32_t POWER_FULL = HALF_PERIOD_US;
   static constexpr uint32_t POWER_PULSE_US = 200u;
 };
 

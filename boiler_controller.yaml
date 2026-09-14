@@ -58,13 +58,13 @@ sensor:
     one_wire_id: one_wire_bus
     name: "boiler top temperature"
     id: boiler_temp_top
-    address:  0x9050d7d4458bc828
+    address:  0x380000007ff11f28
     update_interval: 9s
   - platform: dallas_temp
     one_wire_id: one_wire_bus
     name: "boiler bottom temperature"
     id: boiler_temp_bottom
-    address:  0xa700000015074f28
+    address:  0x510000007ff96528
     update_interval: 9s
 
 external_components:
